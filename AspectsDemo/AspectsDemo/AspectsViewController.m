@@ -10,6 +10,16 @@
 #import "Aspects.h"
 
 @implementation AspectsViewController
+-(void)viewWillAppear:(BOOL)animated{
+    [super viewWillAppear:animated];
+    [self aspect_hookSelector:@selector(viewDidAppear:) withOptions:2 usingBlock:^(id<AspectInfo> info, BOOL animated) {
+        NSLog(@"viewDidAppear");
+    } error:nil];
+}
+
+-(void)viewDidAppear:(BOOL)animated{
+    NSLog(@"real viewdidappear");
+}
 
 - (IBAction)buttonPressed:(id)sender {
     UIViewController *testController = [[UIImagePickerController alloc] init];

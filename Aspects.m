@@ -120,6 +120,7 @@ static id aspect_add(id self, SEL selector, AspectOptions options, id block, NSE
     NSCParameterAssert(block);
 
     __block AspectIdentifier *identifier = nil;
+    // 使用锁，保证 Hook 动作的唯一性。
     aspect_performLocked(^{
         if (aspect_isSelectorAllowedAndTrack(self, selector, options, error)) {
             AspectsContainer *aspectContainer = aspect_getContainerForObject(self, selector);
@@ -272,11 +273,15 @@ static void aspect_prepareClassAndHookSelector(NSObject *self, SEL selector, NSE
     Class klass = aspect_hookClass(self, error);
     Method targetMethod = class_getInstanceMethod(klass, selector);
     IMP targetMethodIMP = method_getImplementation(targetMethod);
+    // 判断 IMP 是否实现，如果没有实现的话 IMP == _objc_msgForward
+    // 确保方法有相应的方法 IMP 才能继续 HOOK。
     if (!aspect_isMsgForwardIMP(targetMethodIMP)) {
         // Make a method alias for the existing method implementation, it not already copied.
         const char *typeEncoding = method_getTypeEncoding(targetMethod);
+        // aliasSelector 是用来代替原 selector 的 SEL。
         SEL aliasSelector = aspect_aliasForSelector(selector);
         if (![klass instancesRespondToSelector:aliasSelector]) {
+            // 添加待替换方法的实现。
             __unused BOOL addedAlias = class_addMethod(klass, aliasSelector, method_getImplementation(targetMethod), typeEncoding);
             NSCAssert(addedAlias, @"Original implementation for %@ is already copied to %@ on %@", NSStringFromSelector(selector), NSStringFromSelector(aliasSelector), klass);
         }
@@ -566,6 +571,7 @@ static NSMutableDictionary *aspect_getSwizzledClassesDict() {
 }
 
 static BOOL aspect_isSelectorAllowedAndTrack(NSObject *self, SEL selector, AspectOptions options, NSError **error) {
+    // 不允许 Hook 的方法表。
     static NSSet *disallowedSelectorList;
     static dispatch_once_t pred;
     dispatch_once(&pred, ^{
@@ -587,7 +593,7 @@ static BOOL aspect_isSelectorAllowedAndTrack(NSObject *self, SEL selector, Aspec
         AspectError(AspectErrorSelectorDeallocPosition, errorDesc);
         return NO;
     }
-
+    // 不允许 Hook 不存在的选择子。
     if (![self respondsToSelector:selector] && ![self.class instancesRespondToSelector:selector]) {
         NSString *errorDesc = [NSString stringWithFormat:@"Unable to find selector -[%@ %@].", NSStringFromClass(self.class), selectorName];
         AspectError(AspectErrorDoesNotRespondToSelector, errorDesc);
@@ -595,8 +601,11 @@ static BOOL aspect_isSelectorAllowedAndTrack(NSObject *self, SEL selector, Aspec
     }
 
     // Search for the current class and the class hierarchy IF we are modifying a class object
+    // 判断通过，则 self 是类对象，不是实例对象。
+    // object_getClass() 指向调用者的 isa 指针指向的对象。
     if (class_isMetaClass(object_getClass(self))) {
         Class klass = [self class];
+        // 获取已被 swizzle 的类字典
         NSMutableDictionary *swizzledClassesDict = aspect_getSwizzledClassesDict();
         Class currentClass = [self class];
 
@@ -623,6 +632,7 @@ static BOOL aspect_isSelectorAllowedAndTrack(NSObject *self, SEL selector, Aspec
         } while ((currentClass = class_getSuperclass(currentClass)));
 
         // Add the selector as being modified.
+        // 标记已 hook 的类及父类，添加 Tracker。
         currentClass = klass;
         AspectTracker *subclassTracker = nil;
         do {
